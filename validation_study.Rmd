@@ -1,0 +1,199 @@
+---
+title: "Estudo de Validacao e Simulacao do Pacote twalkR"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Estudo de Validacao e Simulacao}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+# Opcoes de configuracao para a vignette
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7,
+  fig.height = 5,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+## Introducao
+
+Este documento apresenta o estudo de Monte Carlo utilizado para validar a implementacao do pacote `twalkR`. O objetivo e demonstrar que o amostrador se comporta como esperado em diversos cenarios desafiadores, replicando os testes classicos da literatura MCMC.
+
+```{r setup, message=FALSE, warning=FALSE}
+# Carregar os pacotes necessarios para a analise
+library(twalkR)
+library(mvtnorm)
+library(coda)
+```
+
+## Funcoes de Analise e Visualizacao
+
+As seguintes funcoes foram utilizadas para processar e visualizar os resultados da bateria de testes. Elas sao uma copia exata do script de validacao original.
+
+```{r analysis-functions}
+calcular_diagnosticos <- function(amostras, burnin_frac = 0.2, nomes_param = NULL, titulo = "") {
+  n_iter <- nrow(amostras)
+  n_burnin <- floor(burnin_frac * n_iter)
+  amostras_pos_burnin <- amostras[(n_burnin + 1):n_iter, , drop = FALSE]
+  n_param <- ncol(amostras)
+  if (is.null(nomes_param)) {
+    nomes_param <- paste0("theta", 1:n_param)
+  }
+  medias <- apply(amostras_pos_burnin, 2, mean)
+  dps <- apply(amostras_pos_burnin, 2, sd)
+  quantis <- apply(amostras_pos_burnin, 2, quantile, probs = c(0.025, 0.5, 0.975))
+  chain <- coda::as.mcmc(amostras_pos_burnin)
+  ess <- coda::effectiveSize(chain)
+  tabela <- data.frame(
+    Parametro = nomes_param, Media = round(medias, 4), DP = round(dps, 4),
+    Q2.5 = round(quantis["2.5%", ], 4), Mediana = round(quantis["50%", ], 4),
+    Q97.5 = round(quantis["97.5%", ], 4), ESS = round(ess, 0)
+  )
+  cat("\nDIAGNOSTICOS DE CONVERGENCIA -", titulo, "\n")
+  print(tabela, row.names = FALSE)
+  return(invisible(tabela))
+}
+
+visualizar_resultados_avancado <- function(amostras, valores_teoricos = NULL,
+                                           titulo = "Resultados", burnin_frac = 0.2,
+                                           correlacao_teorica = NULL, mostrar_acf = TRUE) {
+  n_total <- nrow(amostras)
+  inicio <- ceiling(n_total * burnin_frac) + 1
+  amostras_analise <- amostras[inicio:n_total, , drop = FALSE]
+  dimensao <- ncol(amostras_analise)
+  
+  oldpar <- par(no.readonly = TRUE)
+  on.exit(par(oldpar))
+
+  if (dimensao == 1) {
+    layout(matrix(c(1, 2, 3, 3), 2, 2, byrow = TRUE))
+  } else if (dimensao == 2) {
+    layout(matrix(c(1, 2, 3, 4), 2, 2, byrow = TRUE))
+  } else {
+    layout(matrix(c(1, 2, 3, 4, 5, 6), 3, 2, byrow = TRUE))
+  }
+
+  par(mar = c(4, 4, 3, 2))
+
+  if (dimensao == 1) {
+    hist(amostras_analise[,1], main = paste(titulo, "- Histograma"), xlab = "theta1", freq = FALSE, col = "lightblue", border = "white")
+    if (!is.null(valores_teoricos)) abline(v = valores_teoricos, col = "red", lwd = 2, lty = 2)
+    plot(amostras[inicio:n_total, 1], type = 'l', col = "darkblue", main = paste(titulo, "- Trace Plot"), xlab = "Iteracao", ylab = "theta1")
+    if (!is.null(valores_teoricos)) abline(h = valores_teoricos, col = "red", lwd = 2, lty = 2)
+    if (mostrar_acf) acf(amostras_analise[,1], main = paste(titulo, "- ACF"), col = "darkgreen")
+  } else if (dimensao == 2) {
+    plot(amostras_analise, pch = ".", col = rgb(0, 0.4, 0.7, 0.3), main = titulo, xlab = "theta1", ylab = "theta2")
+    if (!is.null(valores_teoricos)) points(valores_teoricos, valores_teoricos, col = "red", pch = 4, cex = 2, lwd = 3)
+    if (!is.null(correlacao_teorica) && requireNamespace("ellipse", quietly = TRUE)) lines(ellipse::ellipse(correlacao_teorica, centre = valores_teoricos), col = "red", lwd = 2)
+    plot(amostras[inicio:n_total, 1], type = 'l', col = "darkblue", main = "Trace Plot theta1", xlab = "Iteracao", ylab = "theta1")
+    if (!is.null(valores_teoricos)) abline(h = valores_teoricos, col = "red", lwd = 2, lty = 2)
+    plot(amostras[inicio:n_total, 2], type = 'l', col = "darkgreen", main = "Trace Plot theta2", xlab = "Iteracao", ylab = "theta2")
+    if (!is.null(valores_teoricos)) abline(h = valores_teoricos, col = "red", lwd = 2, lty = 2)
+    plot(density(amostras_analise[,1]), main = "Densidade Marginal theta1", xlab = "theta1", col = "darkblue", lwd = 2)
+    if (!is.null(valores_teoricos)) abline(v = valores_teoricos, col = "red", lwd = 2, lty = 2)
+  } else {
+    for (i in 1:min(4, dimensao)) {
+      plot(amostras[inicio:n_total, i], type = 'l', col = "darkblue", main = paste("Trace Plot theta", i), xlab = "Iteracao", ylab = paste0("theta", i))
+      if (!is.null(valores_teoricos) && length(valores_teoricos) >= i) abline(h = valores_teoricos[i], col = "red", lwd = 2, lty = 2)
+    }
+  }
+}
+```
+
+## Bateria de Testes
+
+Executamos a bateria de testes com `N_ITER_VIGNETTE = 5000` para que a vignette seja compilada rapidamente.
+
+```{r run-all-tests, eval=TRUE, cache=TRUE}
+N_ITER_VIGNETTE <- 5000
+BURN_FRAC <- 0.2
+
+# --- TESTE 1: Normal Padrão Univariada ---
+cat("\n--- TESTE 1: Normal Padrao ---\n")
+log_posterior_1 <- function(x) dnorm(x, log = TRUE)
+resultado_1 <- twalk(log_posterior_1, n_iter = N_ITER_VIGNETTE, x0 = -2, xp0 = 2)
+calcular_diagnosticos(resultado_1$todas_amostras, BURN_FRAC, "theta", "Normal Padrao")
+visualizar_resultados_avancado(resultado_1$todas_amostras, 0, "Teste 1: Normal Padrao")
+```
+
+```{r}
+# --- TESTE 2: Normal Bivariada Correlacionada ---
+cat("\n--- TESTE 2: Normal Bivariada ---\n")
+media_teorica_2 <- c(1, -0.5)
+cov_teorica_2 <- matrix(c(4, 0.7*2*1.5, 0.7*2*1.5, 2.25), 2, 2)
+log_posterior_2 <- function(x) mvtnorm::dmvnorm(x, mean = media_teorica_2, sigma = cov_teorica_2, log = TRUE)
+resultado_2 <- twalk(log_posterior_2, n_iter = N_ITER_VIGNETTE, x0 = c(0,0), xp0 = c(2,-1))
+calcular_diagnosticos(resultado_2$todas_amostras, BURN_FRAC, c("theta1", "theta2"), "Normal Bivariada")
+visualizar_resultados_avancado(resultado_2$todas_amostras, media_teorica_2, "Teste 2: Normal Bivariada")
+```
+
+```{r}
+# --- TESTE 3: Distribuição Banana (SUA VERSÃO ORIGINAL) ---
+cat("\n--- TESTE 3: Banana ---\n")
+cat("\n--- TESTE 3: Banana ---\n")
+log_posterior_3 <- function(x) {
+  x1 <- x[1]
+  x2 <- x[2]
+  A <- 1
+  B <- 0.1
+  -0.5 * (x1^2/A + A*(x2 - B*x1^2 + A*B)^2)
+}
+resultado_3 <- twalk(log_posterior_3, n_iter = N_ITER_VIGNETTE, x0 = c(-1.5, -0.2), xp0 = c(1.5, -0.2))
+calcular_diagnosticos(resultado_3$todas_amostras, BURN_FRAC, c("theta1", "theta2"), "Banana")
+visualizar_resultados_avancado(resultado_3$todas_amostras, NULL, "Teste 3: Banana")
+```
+
+```{r}
+# --- TESTE 4: Rosenbrock ---
+cat("\n--- TESTE 4: Rosenbrock ---\n")
+log_posterior_4 <- function(x) {
+  x1 <- x[1]
+  x2 <- x[2]
+  -0.5 * (100 * (x2 - x1^2)^2 + (1 - x1)^2)
+}
+resultado_4 <- twalk(log_posterior_4, n_iter = N_ITER_VIGNETTE, x0 = c(0,0), xp0 = c(-1,1))
+calcular_diagnosticos(resultado_4$todas_amostras, BURN_FRAC, c("theta1", "theta2"), "Rosenbrock")
+visualizar_resultados_avancado(resultado_4$todas_amostras, c(1,1), "Teste 4: Rosenbrock")
+```
+
+```{r}
+# --- TESTE 5: Mistura de Gaussianas ---
+cat("\n--- TESTE 5: Mistura de Gaussianas ---\n")
+peso1 <- 0.4; media1 <- c(-2, 2); cov1 <- diag(c(0.5, 0.5))
+peso2 <- 0.6; media2 <- c(3, -1); cov2 <- diag(c(0.8, 0.3))
+log_posterior_5 <- function(x) { log(peso1 * mvtnorm::dmvnorm(x, media1, cov1) + peso2 * mvtnorm::dmvnorm(x, media2, cov2)) }
+resultado_5 <- twalk(log_posterior_5, n_iter = N_ITER_VIGNETTE, x0 = media1, xp0 = media2)
+calcular_diagnosticos(resultado_5$todas_amostras, BURN_FRAC, c("theta1", "theta2"), "Mistura Gaussiana")
+visualizar_resultados_avancado(resultado_5$todas_amostras, NULL, "Teste 5: Mistura Gaussiana")
+```
+
+```{r}
+# --- TESTE 6: Alta Dimensionalidade (10D) ---
+cat("\n--- TESTE 6: Normal 10D ---\n")
+dimensao_6 <- 10; media_teorica_6 <- 1:dimensao_6; rho <- 0.7
+cov_teorica_6 <- matrix(rho^abs(outer(1:dimensao_6, 1:dimensao_6, "-")), dimensao_6, dimensao_6)
+log_posterior_6 <- function(x) mvtnorm::dmvnorm(x, mean = media_teorica_6, sigma = cov_teorica_6, log = TRUE)
+resultado_6 <- twalk(log_posterior_6, n_iter = N_ITER_VIGNETTE, x0 = rep(0, dimensao_6), xp0 = rep(2, dimensao_6))
+calcular_diagnosticos(resultado_6$todas_amostras, BURN_FRAC, paste0("theta", 1:dimensao_6), "Normal 10D")
+```
+
+```{r}
+# --- TESTE 7: Regressão Logística Bayesiana ---
+cat("\n--- TESTE 7: Regressao Logistica ---\n")
+set.seed(123); n_obs <- 2000
+beta_verdadeiro <- c(0.5, -1.2, 0.8)
+X <- cbind(1, rnorm(n_obs, 0, 1), rnorm(n_obs, 0, 1.5))
+eta <- X %*% beta_verdadeiro; prob <- 1 / (1 + exp(-eta)); y <- rbinom(n_obs, 1, prob)
+log_posterior_7 <- function(beta, X, y) { eta <- X %*% beta; log_lik <- sum(y * eta - log(1 + exp(eta))); log_prior <- sum(dnorm(beta, 0, 5, log = TRUE)); return(log_lik + log_prior) }
+resultado_7 <- twalk(log_posterior_7, n_iter = N_ITER_VIGNETTE, x0 = c(0,0,0), xp0 = c(0.2,-0.2,0.1), X = X, y = y)
+calcular_diagnosticos(resultado_7$todas_amostras, BURN_FRAC, c("beta0", "beta1", "beta2"), "Regressao Logistica")
+```
+
+
+## Conclusão do Estudo
+
+Os resultados da bateria de testes demonstram que a implementação do `twalk` é robusta e se comporta como esperado. O amostrador foi capaz de convergir e explorar eficientemente distribuições de alta correlação e multimodalidade sem a necessidade de ajuste manual, validando sua utilidade como uma ferramenta de propósito geral para inferência Bayesiana.
